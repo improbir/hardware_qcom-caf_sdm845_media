@@ -296,10 +296,18 @@ void* async_message_thread (void *input)
                  * let's handle as Sufficient. Ex : 1080 & 1088 or 2160 & 2176.
                  * When FBD comes, component updates the clients with actual
                  * resolution through set_buffer_geometry.
+                 * As the LCU size for HEVC is 32bit, we need 32 pixel alignment
+                 * for HEVC. For others, it should be 16.
                  */
 
-                 event_fields_changed |= (omx->drv_ctx.video_resolution.frame_height != ptr[7]);
-                 event_fields_changed |= (omx->drv_ctx.video_resolution.frame_width != ptr[8]);
+                uint32_t pixel_align = (codec  == V4L2_PIX_FMT_HEVC? 32:16);
+
+                event_fields_changed |= (ALIGN(omx->drv_ctx.video_resolution.frame_height,
+                                                         pixel_align) !=
+                                         ALIGN(ptr[0], pixel_align));
+                event_fields_changed |= (ALIGN(omx->drv_ctx.video_resolution.frame_width,
+                                                         pixel_align) !=
+                                         ALIGN(ptr[1], pixel_align));
 
                  if ((codec == V4L2_PIX_FMT_H264) ||
                      (codec  == V4L2_PIX_FMT_HEVC)) {
@@ -12422,8 +12430,13 @@ OMX_BUFFERHEADERTYPE* omx_vdec::allocate_color_convert_buf::get_il_buf_hdr()
 {
     bool status = true;
     pthread_mutex_lock(&omx->c_lock);
+     /* Whenever port mode is set to kPortModeDynamicANWBuffer, Video Frameworks
+        always uses VideoNativeMetadata and OMX recives buffer type as
+        grallocsource via storeMetaDataInBuffers_l API. The buffer_size
+        will be communicated to frameworks via IndexParamPortdefinition. */
     if (!enabled)
-        buffer_size = omx->drv_ctx.op_buf.buffer_size;
+        buffer_size = omx->dynamic_buf_mode ? sizeof(struct VideoNativeMetadata) :
+                      omx->drv_ctx.op_buf.buffer_size;
     else {
         buffer_size = c2dcc.getBuffSize(C2D_OUTPUT);
     }
@@ -12432,9 +12445,10 @@ OMX_BUFFERHEADERTYPE* omx_vdec::allocate_color_convert_buf::get_il_buf_hdr()
 }
 
 OMX_ERRORTYPE omx_vdec::allocate_color_convert_buf::set_buffer_req(
-        OMX_U32 buffer_size, OMX_U32 actual_count) {
-    OMX_U32 expectedSize = enabled ? buffer_size_req : omx->drv_ctx.op_buf.buffer_size;
-
+        OMX_U32 buffer_size, OMX_U32 actual_count)
+{
+    OMX_U32 expectedSize = enabled ? buffer_size_req : omx->dynamic_buf_mode ?
+            sizeof(struct VideoDecoderOutputMetaData) : omx->drv_ctx.op_buf.buffer_size;
     if (buffer_size < expectedSize) {
         DEBUG_PRINT_ERROR("OP Requirements: Client size(%u) insufficient v/s requested(%u)",
                 buffer_size, expectedSize);
